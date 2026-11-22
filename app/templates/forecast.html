@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}周报到报估算{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>周报到报估算（UTC 自然周）</h2>
+  <form method="get" action="{{ url_for('forecast') }}">
+    <p>
+      <label>台账：
+        <select name="source" required>
+          <option value="">— 请选择 —</option>
+          {% for s in sources %}
+          <option value="{{ s }}" {% if s == source %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      &nbsp;
+      <label>截止日（已过去的日期）：
+        <input type="date" name="cutoff" value="{{ cutoff }}" max="{{ max_cutoff }}" required>
+      </label>
+      &nbsp;
+      <button type="submit">估算</button>
+    </p>
+  </form>
+  {% if not sources %}
+  <p class="muted">还没有故障单数据，请先在首页上传故障单 CSV。</p>
+  {% endif %}
+  <p class="muted">
+    口径：按 UTC 自然周（周一至周日）归单；周龄 = 截止日 − 周日（天）。
+    取最近一个已结束周为待估周，用此前最近 8 个已满 28 天的周算到报比例：
+    分母 = 各周在周末后第 28 天归入该周的单数，分子 = 其中在与待估周相同周龄时已归入该周的单；
+    第 28 天预计单数 = 已报数 ÷ 到报比例。各截点均按当时已知的发生日取数，缺发生日的单另计。
+  </p>
+</div>
+
+{% if result %}
+<div class="card">
+  <h2>估算结果：{{ result.source }} ｜ 待估周 {{ result.monday }} ~ {{ result.sunday }}（UTC）</h2>
+  <p>
+    <span class="stat">截止日 <b>{{ result.cutoff }}</b></span>
+    <span class="stat">周龄 <b>{{ result.age }}</b> 天</span>
+    <span class="stat">已报单数 <b>{{ result.reported }}</b></span>
+    <span class="stat">缺发生日（另计） <b>{{ result.missing }}</b></span>
+  </p>
+  <p>
+    {% if result.estimate is not none %}
+    <span class="stat">到报比例 <b>{{ '%.1f%%' | format(result.ratio * 100) }}</b>
+      <span class="muted">（{{ result.numer_total }} / {{ result.denom_total }}）</span></span>
+    <span class="stat">第 28 天预计单数 <b>{{ '%.1f' | format(result.estimate) }}</b></span>
+    {% else %}
+    <span class="tag bad">暂无法给出预计数</span>
+    <span class="muted">{{ result.reason }}；当前仅已报 {{ result.reported }} 张可供参考。</span>
+    {% endif %}
+  </p>
+</div>
+
+<div class="card">
+  <h2>参考周（此前最近 8 个已满 28 天的周）</h2>
+  <table>
+    <tr>
+      <th>周（周一 ~ 周日，UTC）</th><th>截止日周龄</th>
+      <th>相同周龄截点</th><th>第 28 天截点</th>
+      <th>分子（相同周龄已归入）</th><th>分母（第 28 天归入）</th>
+    </tr>
+    {% for w in result.ref_weeks %}
+    <tr>
+      <td class="mono">{{ w.monday }} ~ {{ w.sunday }}</td>
+      <td>{{ w.age }} 天</td>
+      <td class="mono">{{ w.same_age_day }}</td>
+      <td class="mono">{{ w.day_28 }}</td>
+      <td>{{ w.numerator }}</td>
+      <td>{{ w.denominator }}</td>
+    </tr>
+    {% endfor %}
+    <tr>
+      <th colspan="4">合计</th>
+      <th>{{ result.numer_total }}</th>
+      <th>{{ result.denom_total }}</th>
+    </tr>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

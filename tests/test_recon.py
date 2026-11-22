@@ -79,7 +79,7 @@ class ReconFlowTest(unittest.TestCase):
         conn = get_db()
         for table in (
             "warehouse_item", "warehouse", "undo_plan", "verified",
-            "confirmation", "ticket", "asset", "batch",
+            "ticket_event", "confirmation", "ticket", "asset", "batch",
         ):
             conn.execute(f"DELETE FROM {table}")
         conn.commit()

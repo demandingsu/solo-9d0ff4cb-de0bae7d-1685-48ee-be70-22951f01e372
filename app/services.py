@@ -1,4 +1,5 @@
-"""业务逻辑：CSV 入仓、同杆分组、唯一性匹配、单条撤销方案与复算入仓。
+"""业务逻辑：CSV 入仓、同杆分组、唯一性匹配、单条撤销方案与复算入仓、
+周报到报估算。
 
 核心模型
 --------
@@ -6,6 +7,14 @@
 活动的同杆确认把若干灯杆引用并成一个连通组（传递）。
 组内每张故障单必须分到不同资产号（二分图匹配，Kuhn 算法，结果确定性）。
 已核对单子的归属作为强制匹配边，复算时不得改变。
+
+周报到报估算
+------------
+故障单可带可选发生日 occurred_on；每次补填/更正都写入 ticket_event
+（UTC 时间戳）。估算按 UTC 自然周归单，任一截点都按“当时已知的发生日”
+取数：用最近 8 个已满 28 天的周算到报比例（分子/分母见 estimate_weekly），
+待估周已报数除以比例即第 28 天预计单数。整次估算在单个读事务内完成，
+读取同一份已提交数据。
 """
 from __future__ import annotations
 
@@ -14,6 +23,7 @@ import hashlib
 import io
 import sqlite3
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
 from .db import get_db, init_db
 
@@ -52,6 +62,28 @@ def _require(row: dict[str, str], fields: tuple[str, ...]) -> None:
     for f in fields:
         if not row.get(f):
             raise ValueError(f"第 {row['_line']} 行缺少必填列 {f}")
+
+
+def _parse_occurred_on(row: dict[str, str]) -> str | None:
+    """可选发生日：留空返回 None（沿用已知日期）；非空必须是合法日期。"""
+    raw = row.get("occurred_on", "")
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw).isoformat()
+    except ValueError:
+        raise ValueError(
+            f"第 {row['_line']} 行发生日 occurred_on 不是合法日期（YYYY-MM-DD）：{raw}"
+        ) from None
+
+
+def _event_now(now: datetime | str | None) -> str | None:
+    """事件时间（UTC）。None 表示用数据库时钟 datetime('now')。"""
+    if now is None:
+        return None
+    if isinstance(now, datetime):
+        return now.strftime("%Y-%m-%d %H:%M:%S")
+    return str(now)
 
 
 # --------------------------------------------------------------------------- #
@@ -94,9 +126,32 @@ def import_assets(raw: bytes, filename: str) -> str:
         conn.close()
 
 
-def import_tickets(raw: bytes, filename: str) -> str:
+def _insert_ticket_event(conn, ticket_id: int, occurred_on: str | None,
+                         changed_at: str | None) -> None:
+    """记录一条“当时已知发生日”历史；changed_at 为 None 时用数据库 UTC 时钟。"""
+    if changed_at is None:
+        conn.execute(
+            "INSERT INTO ticket_event(ticket_id, occurred_on) VALUES (?,?)",
+            (ticket_id, occurred_on),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO ticket_event(ticket_id, occurred_on, changed_at) "
+            "VALUES (?,?,?)",
+            (ticket_id, occurred_on, changed_at),
+        )
+
+
+def import_tickets(raw: bytes, filename: str,
+                   now: datetime | str | None = None) -> str:
+    """故障单入仓（可补传，upsert）。
+
+    occurred_on 为可选列：留空沿用该单已知发生日；非空且与已知值不同则
+    更正。首次入库与每次发生日补填/更正都会写 ticket_event（UTC 时间），
+    供周统计按各截点当时已知的发生日取数。now 仅供演示/测试注入事件时间。
+    """
     rows = _read_csv(raw)
-    parsed: list[tuple[str, str, str, str]] = []
+    parsed: list[tuple[str, str, str, str, str | None]] = []
     seen: set[tuple[str, str]] = set()
     for row in rows:
         _require(row, ("ticket_no", "source", "pole_source", "pole_no"))
@@ -107,50 +162,63 @@ def import_tickets(raw: bytes, filename: str) -> str:
             )
         seen.add(key)
         parsed.append(
-            (row["source"], row["ticket_no"], row["pole_source"], row["pole_no"])
+            (
+                row["source"],
+                row["ticket_no"],
+                row["pole_source"],
+                row["pole_no"],
+                _parse_occurred_on(row),
+            )
         )
 
+    changed_at = _event_now(now)
     conn = get_db()
     try:
         init_db(conn)
-        inserted = updated = 0
+        inserted = updated = dated = 0
         with conn:
-            for source, ticket_no, pole_source, pole_no in parsed:
+            for source, ticket_no, pole_source, pole_no, occurred_on in parsed:
                 old = conn.execute(
-                    "SELECT t.id, v.asset_id FROM ticket t "
+                    "SELECT t.id, t.pole_source, t.pole_no, t.occurred_on, "
+                    "v.asset_id FROM ticket t "
                     "LEFT JOIN verified v ON v.ticket_id=t.id "
                     "WHERE t.source=? AND t.ticket_no=?",
                     (source, ticket_no),
                 ).fetchone()
                 if old:
-                    if old["asset_id"] is not None and (
-                        pole_source, pole_no
-                    ) != (
-                        conn.execute(
-                            "SELECT pole_source, pole_no FROM ticket WHERE id=?",
-                            (old["id"],),
-                        ).fetchone()
+                    if old["asset_id"] is not None and (pole_source, pole_no) != (
+                        old["pole_source"],
+                        old["pole_no"],
                     ):
                         raise ValueError(
                             f"单号 {ticket_label(source, ticket_no)} 已核对，不能改挂灯杆"
                         )
+                    # 发生日留空 -> 沿用已知日期；非空且不同 -> 更正并记事件
+                    new_occ = old["occurred_on"] if occurred_on is None else occurred_on
                     conn.execute(
-                        "UPDATE ticket SET pole_source=?, pole_no=?, "
+                        "UPDATE ticket SET pole_source=?, pole_no=?, occurred_on=?, "
                         "updated_at=datetime('now','localtime') WHERE id=?",
-                        (pole_source, pole_no, old["id"]),
+                        (pole_source, pole_no, new_occ, old["id"]),
                     )
                     updated += 1
+                    if new_occ != old["occurred_on"]:
+                        _insert_ticket_event(conn, old["id"], new_occ, changed_at)
+                        dated += 1
                 else:
-                    conn.execute(
-                        "INSERT INTO ticket(source, ticket_no, pole_source, pole_no) "
-                        "VALUES (?,?,?,?)",
-                        (source, ticket_no, pole_source, pole_no),
+                    cur = conn.execute(
+                        "INSERT INTO ticket(source, ticket_no, pole_source, pole_no, "
+                        "occurred_on) VALUES (?,?,?,?,?)",
+                        (source, ticket_no, pole_source, pole_no, occurred_on),
                     )
+                    _insert_ticket_event(conn, cur.lastrowid, occurred_on, changed_at)
                     inserted += 1
             conn.execute(
                 "INSERT INTO batch(kind, filename) VALUES ('ticket', ?)", (filename,)
             )
-        return f"故障单已写入：新增 {inserted} 张，更新 {updated} 张"
+        msg = f"故障单已写入：新增 {inserted} 张，更新 {updated} 张"
+        if dated:
+            msg += f"（含发生日补填/更正 {dated} 张）"
+        return msg
     finally:
         conn.close()
 
@@ -552,4 +620,132 @@ def apply_plan(conn, group_key: str, confirmation_id: int) -> dict:
             for sub, assignment in affected
         ],
         "warehouse_id": wid,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 周报到报估算（UTC 自然周）
+# --------------------------------------------------------------------------- #
+REFERENCE_WEEKS = 8  # 参考周个数：此前最近 8 个已满 28 天的周
+MATURE_DAYS = 28     # 周“长满”口径：周末后第 28 天
+
+
+def week_sunday(d: date) -> date:
+    """截至 d 最近一个已结束 UTC 自然周的周日（周末），即不晚于 d 的最近一个周日。"""
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+
+def _state_as_of(conn, until: date, source: str) -> dict[int, str | None]:
+    """截至 until 日（含当日，UTC）已提交的 {ticket_id: 当时已知发生日或 None}。
+
+    单子的“存在”以首条事件为准；发生日取该截点最新一条事件的值。
+    """
+    until_exclusive = (until + timedelta(days=1)).isoformat()
+    rows = conn.execute(
+        """
+        SELECT t.id AS id,
+               (SELECT e.occurred_on FROM ticket_event e
+                 WHERE e.ticket_id = t.id AND e.changed_at < ?
+                 ORDER BY e.changed_at DESC, e.id DESC LIMIT 1) AS occurred_on
+        FROM ticket t
+        WHERE t.source = ?
+          AND EXISTS (SELECT 1 FROM ticket_event e
+                       WHERE e.ticket_id = t.id AND e.changed_at < ?)
+        """,
+        (until_exclusive, source, until_exclusive),
+    ).fetchall()
+    return {r["id"]: r["occurred_on"] for r in rows}
+
+
+def _week_members(state: dict[int, str | None], monday: date, sunday: date) -> set[int]:
+    """该状态下发生日落在 [monday, sunday] 内的单子（缺发生日的单不归入任何周）。"""
+    lo, hi = monday.isoformat(), sunday.isoformat()
+    return {tid for tid, occ in state.items() if occ is not None and lo <= occ <= hi}
+
+
+def list_sources(conn) -> list[str]:
+    return [
+        r["source"]
+        for r in conn.execute("SELECT DISTINCT source FROM ticket ORDER BY source")
+    ]
+
+
+def estimate_weekly(conn, source: str, cutoff: date) -> dict:
+    """估算 source 台账最近一个已结束周在周末后第 28 天的累计单量。
+
+    - 待估周：截止日当日已结束的最近一个 UTC 自然周；周龄 = 截止日 − 周日（天）。
+    - 参考周：此前最近 8 个已满 28 天的周（周日 = 待估周日 − 28 − 7k，k=0..7）。
+    - 分母：各参考周在周末后第 28 天归入该周的单数；
+      分子：其中在与待估周相同周龄时已归入该周的单。
+    - 到报比例 = 分子合计 / 分母合计；第 28 天预计单数 = 已报数 / 比例。
+    - 分母或比例为零时不给预计数，只给已报数与原因；缺发生日的单另计。
+    整次估算在单个读事务内完成，读取同一份已提交数据。
+    """
+    conn.execute("BEGIN")
+    try:
+        sunday = week_sunday(cutoff)
+        monday = sunday - timedelta(days=6)
+        age = (cutoff - sunday).days
+
+        # 待估周：截止日当时已报单数 + 缺发生日另计
+        state_cutoff = _state_as_of(conn, cutoff, source)
+        reported = len(_week_members(state_cutoff, monday, sunday))
+        missing = sum(1 for occ in state_cutoff.values() if occ is None)
+
+        ref_weeks = []
+        numer_total = denom_total = 0
+        for k in range(REFERENCE_WEEKS):
+            ref_sunday = sunday - timedelta(days=MATURE_DAYS + 7 * k)
+            ref_monday = ref_sunday - timedelta(days=6)
+            day_28 = ref_sunday + timedelta(days=MATURE_DAYS)
+            same_age_day = ref_sunday + timedelta(days=age)
+            members_28 = _week_members(
+                _state_as_of(conn, day_28, source), ref_monday, ref_sunday
+            )
+            members_age = _week_members(
+                _state_as_of(conn, same_age_day, source), ref_monday, ref_sunday
+            )
+            denominator = len(members_28)
+            numerator = len(members_28 & members_age)
+            denom_total += denominator
+            numer_total += numerator
+            ref_weeks.append(
+                {
+                    "monday": ref_monday,
+                    "sunday": ref_sunday,
+                    "age": (cutoff - ref_sunday).days,
+                    "same_age_day": same_age_day,
+                    "day_28": day_28,
+                    "numerator": numerator,
+                    "denominator": denominator,
+                }
+            )
+
+        ratio = estimate = reason = None
+        if denom_total == 0:
+            reason = "8 个参考周在周末后第 28 天归入的单数合计为 0，无法计算到报比例"
+        elif numer_total == 0:
+            reason = "参考周在与待估周相同周龄时已归入的单数合计为 0，到报比例为 0，无法估算"
+        else:
+            ratio = numer_total / denom_total
+            estimate = reported / ratio
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return {
+        "source": source,
+        "cutoff": cutoff,
+        "monday": monday,
+        "sunday": sunday,
+        "age": age,
+        "reported": reported,
+        "missing": missing,
+        "ref_weeks": ref_weeks,
+        "numer_total": numer_total,
+        "denom_total": denom_total,
+        "ratio": ratio,
+        "estimate": estimate,
+        "reason": reason,
     }

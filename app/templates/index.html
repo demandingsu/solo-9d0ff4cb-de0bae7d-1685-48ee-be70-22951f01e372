@@ -11,7 +11,7 @@
     <tr>
       {% for kind, hint, cols in [
         ('asset', 'asset_no,pole_source,pole_no', '资产号、资产来源台账、资产上的灯杆号'),
-        ('ticket', 'ticket_no,source,pole_source,pole_no', '单号、单号来源台账、所挂灯杆来源、灯杆号'),
+        ('ticket', 'ticket_no,source,pole_source,pole_no[,occurred_on]', '单号、单号来源台账、所挂灯杆来源、灯杆号、可选发生日（留空沿用已知日期）'),
         ('confirm', 'source_a,pole_no_a,source_b,pole_no_b[,confirmed_by]', '两根被认成同一根的灯杆引用')
       ] %}
       <td style="vertical-align:top">

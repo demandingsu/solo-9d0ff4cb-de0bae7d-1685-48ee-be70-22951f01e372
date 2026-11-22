@@ -1,5 +1,7 @@
-"""Flask 路由：上传、冲突组列表、方案选择与复算撤销、入仓清单查看。"""
+"""Flask 路由：上传、冲突组列表、方案选择与复算撤销、入仓清单查看、周报到报估算。"""
 from __future__ import annotations
+
+from datetime import date, datetime, timezone
 
 from flask import (
     Flask,
@@ -113,6 +115,45 @@ def apply_plan(group_key: str):
         "ok",
     )
     return redirect(url_for("warehouse_view", warehouse_id=result["warehouse_id"]))
+
+
+@app.route("/forecast")
+def forecast():
+    """周报到报估算：选台账与已过去的截止日，看最近一个已结束周的
+    已报单数、到报比例与第 28 天预计单数。"""
+    source = request.args.get("source", "").strip()
+    cutoff_raw = request.args.get("cutoff", "").strip()
+    today_utc = datetime.now(timezone.utc).date()
+    conn = get_db()
+    try:
+        sources = services.list_sources(conn)
+        result = None
+        if source or cutoff_raw:
+            cutoff = None
+            if not source:
+                flash("请选择台账", "error")
+            elif not cutoff_raw:
+                flash("请选择截止日", "error")
+            else:
+                try:
+                    cutoff = date.fromisoformat(cutoff_raw)
+                except ValueError:
+                    flash("截止日格式不正确（应为 YYYY-MM-DD）", "error")
+            if source and cutoff is not None:
+                if cutoff >= today_utc:
+                    flash("截止日须为已过去的日期（早于 UTC 今天）", "error")
+                else:
+                    result = services.estimate_weekly(conn, source, cutoff)
+        return render_template(
+            "forecast.html",
+            sources=sources,
+            source=source,
+            cutoff=cutoff_raw,
+            max_cutoff=(today_utc - date.resolution).isoformat(),
+            result=result,
+        )
+    finally:
+        conn.close()
 
 
 @app.route("/warehouse/<int:warehouse_id>")

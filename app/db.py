@@ -32,16 +32,30 @@ CREATE TABLE IF NOT EXISTS asset (
 );
 
 -- 故障单：单号按来源台账区分 (source + ticket_no 唯一)
+-- occurred_on 为可选发生日（YYYY-MM-DD），NULL 表示发生日未知
 CREATE TABLE IF NOT EXISTS ticket (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     source       TEXT NOT NULL,
     ticket_no    TEXT NOT NULL,
     pole_source  TEXT NOT NULL,
     pole_no      TEXT NOT NULL,
+    occurred_on  TEXT,
     uploaded_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     updated_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     UNIQUE(source, ticket_no)
 );
+
+-- 故障单“当时已知发生日”的历史：首次入库记一条，之后每次发生日
+-- 补填/更正再记一条。changed_at 用 UTC（datetime('now')），
+-- 供周统计按“各截点当时已知的发生日”取数。
+CREATE TABLE IF NOT EXISTS ticket_event (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id   INTEGER NOT NULL REFERENCES ticket(id),
+    occurred_on TEXT,
+    changed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_event_ticket
+    ON ticket_event(ticket_id, changed_at, id);
 
 -- 同杆确认：可撤销。同一对灯杆只保留一条活动确认，撤销后可再次确认。
 CREATE TABLE IF NOT EXISTS confirmation (
@@ -98,4 +112,18 @@ def get_db() -> sqlite3.Connection:
 
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """老库升级：补 occurred_on 列；为没有任何历史记录的存量故障单
+    补一条初始事件（以升级时刻为首次已知时间，发生日取当前值）。"""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(ticket)")}
+    if "occurred_on" not in cols:
+        conn.execute("ALTER TABLE ticket ADD COLUMN occurred_on TEXT")
+    conn.execute(
+        "INSERT INTO ticket_event(ticket_id, occurred_on) "
+        "SELECT t.id, t.occurred_on FROM ticket t "
+        "WHERE NOT EXISTS (SELECT 1 FROM ticket_event e WHERE e.ticket_id = t.id)"
+    )

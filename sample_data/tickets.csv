@@ -1,4 +1,4 @@
-ticket_no,source,pole_source,pole_no
-T100,LEDGER_A,LEDGER_A,P1
-T200,LEDGER_B,LEDGER_B,P1
-T300,LEDGER_A,LEDGER_A,P2
+ticket_no,source,pole_source,pole_no,occurred_on
+T100,LEDGER_A,LEDGER_A,P1,2026-11-16
+T200,LEDGER_B,LEDGER_B,P1,2026-11-17
+T300,LEDGER_A,LEDGER_A,P2,
