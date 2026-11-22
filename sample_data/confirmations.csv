@@ -1,0 +1,3 @@
+source_a,pole_no_a,source_b,pole_no_b,confirmed_by
+LEDGER_A,P1,LEDGER_B,P1,inspector-1
+LEDGER_A,P2,LEDGER_B,P1,inspector-2

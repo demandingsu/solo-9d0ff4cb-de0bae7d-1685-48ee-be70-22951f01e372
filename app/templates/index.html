@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="card">
+  <h2>数据上传（故障单与同杆确认支持补传）</h2>
+  <table>
+    <tr>
+      <th>资产号清单（全量替换）</th>
+      <th>故障单（可补传）</th>
+      <th>同杆确认（可补传/可再确认）</th>
+    </tr>
+    <tr>
+      {% for kind, hint, cols in [
+        ('asset', 'asset_no,pole_source,pole_no', '资产号、资产来源台账、资产上的灯杆号'),
+        ('ticket', 'ticket_no,source,pole_source,pole_no', '单号、单号来源台账、所挂灯杆来源、灯杆号'),
+        ('confirm', 'source_a,pole_no_a,source_b,pole_no_b[,confirmed_by]', '两根被认成同一根的灯杆引用')
+      ] %}
+      <td style="vertical-align:top">
+        <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data">
+          <input type="hidden" name="kind" value="{{ kind }}">
+          <p class="muted">CSV 列：<code>{{ hint }}</code></p>
+          <p><input type="file" name="file" accept=".csv,text/csv" required></p>
+          <button type="submit">上传</button>
+        </form>
+      </td>
+      {% endfor %}
+    </tr>
+  </table>
+  <p class="muted">说明：编号按来源台账区分（页面显示为 <code>来源/编号</code>）；同杆确认具有传递性，撤销后同对灯杆可再次补传确认。</p>
+</div>
+
+<div class="card">
+  <h2>当前数据</h2>
+  <span class="stat">资产号 <b>{{ stats.assets }}</b></span>
+  <span class="stat">故障单 <b>{{ stats.tickets }}</b></span>
+  <span class="stat">活动同杆确认 <b>{{ stats.active_confirms }}</b></span>
+  <span class="stat">已核对单 <b>{{ stats.verified }}</b></span>
+  <span class="stat">入仓组 <b>{{ stats.warehouses }}</b></span>
+</div>
+
+<div class="card">
+  <h2>冲突组（同杆误认，组内单需要唯一资产号）</h2>
+  {% if not groups %}
+    <p class="muted">暂无冲突组：请先上传资产清单、故障单与同杆确认。单根灯杆、无同杆确认的数据不会出现在这里。</p>
+  {% else %}
+  <table>
+    <tr>
+      <th>组</th><th>灯杆引用（来源/灯杆号）</th><th>故障单</th><th>候选资产号</th>
+      <th>当前是否可唯一归属</th><th>已选方案 / 入仓</th><th>操作</th>
+    </tr>
+    {% for g in groups %}
+    <tr>
+      <td class="mono">{{ g.group_key }}</td>
+      <td class="mono">{{ g.poles | join('，') }}</td>
+      <td>{{ g.ticket_ids | length }} 张<br><span class="muted mono">
+        {% for tid in g.ticket_ids %}{{ g.trows[tid].source }}/{{ g.trows[tid].ticket_no }}{% if not loop.last %}，{% endif %}{% endfor %}
+      </span></td>
+      <td>{{ g.asset_ids | length }} 个<br><span class="muted mono">
+        {% for aid in g.asset_ids %}{{ g.arows[aid].asset_no }}{% if not loop.last %}，{% endif %}{% endfor %}
+      </span></td>
+      <td>
+        {% if g.feasible %}<span class="tag ok">可唯一归属</span>
+        {% else %}<span class="tag bad">无法唯一归属</span>{% endif %}
+        {% if g.verified_ticket_ids %}<br><span class="muted">含 {{ g.verified_ticket_ids | length }} 张已核对单（归属锁定）</span>{% endif %}
+      </td>
+      <td>
+        {% if g.selection %}<span class="tag info">已选撤销：{{ g.selection.edge_label }}</span>{% else %}<span class="muted">未选</span>{% endif %}
+        {% if g.warehouse_id %}<br><a href="{{ url_for('warehouse_view', warehouse_id=g.warehouse_id) }}">查看入仓清单 #{{ g.warehouse_id }}</a>{% endif %}
+      </td>
+      <td><a href="{{ url_for('group_detail', group_key=g.group_key) }}"><button type="button">查看撤销方案</button></a></td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>上传批次</h2>
+  {% if not batches %}<p class="muted">尚无上传记录。</p>{% else %}
+  <table>
+    <tr><th>#</th><th>类型</th><th>文件</th><th>时间</th></tr>
+    {% for b in batches %}
+    <tr><td>{{ b.id }}</td><td>
+      {% if b.kind == 'asset' %}资产清单{% elif b.kind == 'ticket' %}故障单{% else %}同杆确认{% endif %}
+    </td><td class="mono">{{ b.filename }}</td><td>{{ b.created_at }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

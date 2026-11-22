@@ -1,0 +1,4 @@
+ticket_no,source,pole_source,pole_no
+T100,LEDGER_A,LEDGER_A,P1
+T200,LEDGER_B,LEDGER_B,P1
+T300,LEDGER_A,LEDGER_A,P2

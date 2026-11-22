@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}灯杆故障单入仓核对{% endblock %}</title>
+  <style>
+    body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+    header { background: #1f4e79; color: #fff; padding: 14px 24px; }
+    header a { color: #cfe2ff; text-decoration: none; }
+    main { max-width: 1080px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 18px 22px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    h2 { margin-top: 0; font-size: 18px; border-left: 4px solid #1f4e79; padding-left: 8px; }
+    table { border-collapse: collapse; width: 100%; font-size: 14px; }
+    th, td { border: 1px solid #d9dde3; padding: 7px 9px; text-align: left; }
+    th { background: #eef2f7; }
+    .flash { padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
+    .flash.ok { background: #e6f4ea; border: 1px solid #9fd3ac; }
+    .flash.error { background: #fdecea; border: 1px solid #f2a8a0; }
+    .tag { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; }
+    .tag.ok { background: #e6f4ea; color: #1e7e34; }
+    .tag.bad { background: #fdecea; color: #b02a37; }
+    .tag.info { background: #e7f0fb; color: #1f4e79; }
+    form.inline { display: inline; }
+    button { background: #1f4e79; color: #fff; border: 0; border-radius: 5px; padding: 7px 16px; cursor: pointer; }
+    button:disabled { background: #9aa5b1; cursor: not-allowed; }
+    .muted { color: #777; font-size: 13px; }
+    .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+    .opt { border: 1px solid #d9dde3; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+    .opt.selected { border-color: #2f8f46; background: #f3fbf5; }
+    .stat { display: inline-block; margin-right: 26px; font-size: 14px; }
+    .stat b { font-size: 20px; color: #1f4e79; }
+    code { background: #f0f2f5; padding: 1px 5px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>灯杆故障单入仓核对系统</strong>
+  &nbsp;|&nbsp; <a href="{{ url_for('index') }}">首页 / 冲突组</a>
+</header>
+<main>
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ category }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+</main>
+</body>
+</html>

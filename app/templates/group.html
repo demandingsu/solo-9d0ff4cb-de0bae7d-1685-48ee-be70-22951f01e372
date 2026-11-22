@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}冲突组 {{ view.group_key }}{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>冲突组 <span class="mono">{{ view.group_key }}</span></h2>
+  <p><b>灯杆引用：</b>
+    {% for p in view.poles %}<code>{{ p }}</code>{% if not loop.last %} 、{% endif %}{% endfor %}
+  </p>
+  <p><b>活动同杆确认：</b>{{ view.edge_ids | length }} 条（传递后并为一组）</p>
+  <table>
+    <tr><th>故障单（来源/单号）</th><th>所挂灯杆</th><th>是否已核对（归属锁定）</th></tr>
+    {% for tid in view.ticket_ids %}
+    <tr>
+      <td class="mono">{{ view.trows[tid].source }}/{{ view.trows[tid].ticket_no }}</td>
+      <td class="mono">{{ view.trows[tid].pole_source }}/{{ view.trows[tid].pole_no }}</td>
+      <td>{% if tid in view.verified_ticket_ids %}
+        <span class="tag ok">已核对 → {{ view.arows[view.assignment[tid]].asset_no if view.assignment and tid in view.assignment else '资产已不在组内' }}</span>
+      {% else %}<span class="muted">未核对</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p style="margin-top:12px">
+    <b>组内候选资产号（{{ view.asset_ids | length }} 个）：</b>
+    {% for aid in view.asset_ids %}<code>{{ view.arows[aid].asset_no }}</code>{% if not loop.last %}，{% endif %}{% endfor %}
+  </p>
+  <p>
+    <b>当前（不撤销）能否让每张单都有唯一资产号：</b>
+    {% if view.feasible %}<span class="tag ok">可以</span>
+    {% else %}<span class="tag bad">不可以，需要撤销同杆确认</span>{% endif %}
+  </p>
+  {% if view.selection %}
+  <p><span class="tag info">当前已选方案：撤销 {{ view.selection.edge_label }}</span>
+     <span class="muted">（补传资料后再次执行会按最新资料复算；不满足条件时须改选）</span></p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>单条撤销方案（撤销一条同杆确认，使组内每张单都有唯一资产号）</h2>
+  {% if not view.options %}
+  <div class="flash error"><b>无解：</b>撤销任意一条活动同杆确认后，仍存在子组无法让每张单都有唯一资产号。
+    请补传故障单修正、资产号清单或同杆确认资料后再试。此状态下系统不会撤销任何确认，也不会改动已核对归属。</div>
+  {% else %}
+    {% for opt in view.options %}
+    <div class="opt {% if view.selection and view.selection.confirmation_id == opt.confirmation_id %}selected{% endif %}">
+      <form method="post" action="{{ url_for('apply_plan', group_key=view.group_key) }}" class="inline">
+        <input type="hidden" name="confirmation_id" value="{{ opt.confirmation_id }}">
+        <p><b>方案 {{ loop.index }}：撤销确认</b> <code>{{ opt.edge_label }}</code>
+           {% if view.selection and view.selection.confirmation_id == opt.confirmation_id %}<span class="tag ok">已选</span>{% endif %}
+        </p>
+        <p class="muted">撤销后组内按同杆关系拆成 {{ opt.partitions | length }} 个子组，各子组的唯一归属如下：</p>
+        {% for sub in opt.partitions %}
+        <table style="margin-bottom:10px">
+          <tr><th>子组灯杆</th><th>故障单</th><th>归属资产号</th><th>备注</th></tr>
+          {% for tid in sub.ticket_ids %}
+          <tr>
+            <td class="mono">{{ sub.trows[tid].pole_source }}/{{ sub.trows[tid].pole_no }}</td>
+            <td class="mono">{{ sub.trows[tid].source }}/{{ sub.trows[tid].ticket_no }}</td>
+            <td class="mono">{{ sub.arows[sub.assignment[tid]].asset_no }}</td>
+            <td>{% if tid in view.verified_ticket_ids %}<span class="tag ok">已核对，归属不变</span>{% else %}<span class="tag info">新单唯一归属</span>{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% endfor %}
+        <button type="submit">按最新资料复算并执行此方案</button>
+      </form>
+    </div>
+    {% endfor %}
+    <p class="muted">执行时系统会再次按最新资料复算：只有“已核对单归属不变”且“最新组内新单也都有唯一归属”时才撤销确认并生成整组入仓清单；
+      条件不符或写入失败时保留原关系和归属并提示原因。</p>
+  {% endif %}
+</div>
+{% endblock %}

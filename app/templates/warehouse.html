@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}入仓清单 #{{ wh.id }}{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>整组入仓清单 #{{ wh.id }}</h2>
+  <p class="muted">冲突组 <span class="mono">{{ wh.group_key }}</span> ｜ 生成时间 {{ wh.created_at }}</p>
+  <table>
+    <tr><th>#</th><th>故障单（来源/单号）</th><th>灯杆（来源/灯杆号）</th><th>归属资产号</th><th>核对状态</th></tr>
+    {% for it in items %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td class="mono">{{ it.source }}/{{ it.ticket_no }}</td>
+      <td class="mono">{{ it.pole_source }}/{{ it.pole_no }}</td>
+      <td class="mono">{{ it.asset_no }}</td>
+      <td>{% if it.is_verified %}<span class="tag ok">已核对（归属保持不变）</span>
+          {% else %}<span class="tag info">本次新核对</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p style="margin-top:14px"><a href="{{ url_for('index') }}"><button type="button">返回首页</button></a></p>
+</div>
+{% endblock %}
